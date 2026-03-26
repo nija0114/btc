@@ -143,6 +143,7 @@ tr:hover td{background:rgba(255,255,255,.02);}
     <div class="hs"><span class="hs-l">BALANCE</span><span class="hs-v" id="hBalance" style="color:var(--g)">$10,000</span></div>
     <div class="hs"><span class="hs-l">P&L</span><span class="hs-v" id="hPnl">$0</span></div>
     <div class="hs"><span class="hs-l">UPTIME</span><span class="hs-v" id="hUptime" style="color:var(--b)">--</span></div>
+    <div class="hs"><span class="hs-l">TICKS/s</span><span class="hs-v" id="hTicks" style="color:var(--o)">--</span></div>
     <div class="dot" id="botDot"></div>
   </div>
 </header>
@@ -306,7 +307,7 @@ tr:hover td{background:rgba(255,255,255,.02);}
 <script>
 // ─── CONFIG ───────────────────────────────────────────────────
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
-const API    = `/api`;
+const API    = `${location.protocol}//${location.host}/api`;
 
 // ─── STATE ───────────────────────────────────────────────────
 let appState = {}, allTrades = [], prices = [], equityHistory = [];
@@ -380,6 +381,16 @@ function updateHeader() {
   pnlEl.textContent = (pnl>=0?'+$':'-$') + Math.abs(pnl).toFixed(0);
   pnlEl.style.color = pnl>=0?'var(--g)':'var(--r)';
   document.getElementById('hUptime').textContent = s.startedAt ? formatUptime(s.startedAt) : '--';
+  // Tick counter — show real-time stream health
+  if (s.tickCount > 0) {
+    document.getElementById('hTicks').textContent = s.tickCount.toLocaleString();
+    document.getElementById('hTicks').style.color = s.wsConnected ? 'var(--g)' : 'var(--r)';
+  }
+  // Update conn status to show Binance WS state
+  if (s.wsConnected) {
+    document.getElementById('connStatus').textContent = '● LIVE STREAM';
+    document.getElementById('connStatus').className = 'connected';
+  }
   const dot = document.getElementById('botDot');
   dot.className = 'dot' + (s.running?' on':'');
 }
@@ -704,20 +715,13 @@ function renderAnalysis(a) {
 
 // ─── BOT CONTROL ─────────────────────────────────────────────
 async function botStart() {
-  try {
-    const posSize = parseInt(document.getElementById('pSz')?.value || 10);
-    const slPct   = parseFloat(document.getElementById('pSl')?.value || 2) / 100;
-    const tpPct   = parseFloat(document.getElementById('pTp')?.value || 4) / 100;
-    const res = await fetch('/api/start', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({posSize,slPct,tpPct}) });
-    const data = await res.json();
-    if (data.ok) { document.getElementById('btnStart').textContent = '✓ BOT RUNNING'; document.getElementById('botDot').className = 'dot on'; }
-  } catch(e) { alert('Error: ' + e.message); }
+  const posSize = parseInt(document.getElementById('pSz').value);
+  const slPct   = parseFloat(document.getElementById('pSl').value) / 100;
+  const tpPct   = parseFloat(document.getElementById('pTp').value) / 100;
+  await fetch(`${API}/start`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({posSize,slPct,tpPct}) });
 }
-async function botStop()  {
-  await fetch('/api/stop', { method:'POST' });
-  document.getElementById('btnStart').textContent = '▶ START BOT';
-}
-async function botReset() { if(confirm('Reset all trades and balance?')) await fetch('/api/reset', { method:'POST' }); }
+async function botStop()  { await fetch(`${API}/stop`,  { method:'POST' }); }
+async function botReset() { if(confirm('Reset all trades and balance?')) await fetch(`${API}/reset`, { method:'POST' }); }
 
 // ─── TABS ────────────────────────────────────────────────────
 function showTab(name) {
