@@ -305,7 +305,7 @@ tr:hover td{background:rgba(255,255,255,.02);}
 
 <script>
 // ─── CONFIG ───────────────────────────────────────────────────
-const WS_URL = `ws://${location.host}`;
+const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 const API    = `${location.protocol}//${location.host}/api`;
 
 // ─── STATE ───────────────────────────────────────────────────
