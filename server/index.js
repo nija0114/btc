@@ -297,5 +297,6 @@ wss.on('connection',ws=>{ws.send(JSON.stringify({type:'init',state:publicState()
 
 server.listen(PORT,'0.0.0.0',()=>{
   console.log(`\n APEX BTC BOT V1-RT — Port ${PORT}\n`);
+  wsFailCount = 99; // skip WS, go straight to REST (Railway geo-blocks Binance)
   connectPriceStream();
 });
