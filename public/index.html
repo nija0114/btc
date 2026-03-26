@@ -306,7 +306,7 @@ tr:hover td{background:rgba(255,255,255,.02);}
 <script>
 // ─── CONFIG ───────────────────────────────────────────────────
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
-const API    = `${location.protocol}//${location.host}/api`;
+const API    = `/api`;
 
 // ─── STATE ───────────────────────────────────────────────────
 let appState = {}, allTrades = [], prices = [], equityHistory = [];
