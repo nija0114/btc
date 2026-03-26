@@ -1,7 +1,7 @@
 'use strict';
 
 // ─── CONSTANTS ────────────────────────────────────────────────
-const SPIKE_COOLDOWN = 18;
+const SPIKE_COOLDOWN = 10; // reduced from 18 — real markets recover faster
 
 // ─── INDICATORS ──────────────────────────────────────────────
 function calcEMA(prices, period) {
@@ -47,21 +47,43 @@ function calcATRpct(prices, period = 14) {
 }
 
 // ─── REGIME DETECTION ────────────────────────────────────────
+// RECALIBRATED for real 1-second BTC price ticks from Kraken/Coinbase.
+// Real BTC on 1s ticks has naturally higher ATR than simulation.
+// Old thresholds (0.22 / 0.5) were too tight — flagging normal moves as EXTREME.
+//
+// Calibration based on typical BTC 1s tick behavior:
+//   Normal quiet session:  atrShort ~0.01–0.04%
+//   Normal active session: atrShort ~0.04–0.10%
+//   Volatile (news/pump):  atrShort ~0.10–0.25%
+//   Extreme (flash crash): atrShort > 0.25%, ratio > 3x
+//
+// Also: spike detection threshold raised to 8x (was 4x) because
+// individual 1s ticks naturally vary more than 4x the baseline.
+
 function detectRegime(prices) {
-  if (prices.length < 10) return { regime: 'NORMAL', atr: 0, spike: false };
-  const atrShort  = calcATRpct(prices, 5);
-  const atrMedium = calcATRpct(prices, 14);
+  if (prices.length < 15) return { regime: 'NORMAL', atr: 0, spike: false };
+
+  const atrShort  = calcATRpct(prices, 5);   // last 5 seconds
+  const atrMedium = calcATRpct(prices, 30);  // last 30 seconds baseline
   const ratio     = atrMedium > 0 ? atrShort / atrMedium : 1;
 
+  // Spike: last single move is 8x the recent average (was 4x — too sensitive)
   let spike = false;
   if (prices.length >= 3) {
     const lastMove = Math.abs(prices[prices.length - 1] - prices[prices.length - 2])
                      / prices[prices.length - 2] * 100;
-    spike = lastMove > atrMedium * 4;
+    spike = lastMove > atrMedium * 8;
   }
 
-  if (spike || ratio > 2.5 || atrShort > 0.5)  return { regime: 'EXTREME',  atr: atrShort, spike };
-  if (ratio > 1.5 || atrShort > 0.22)           return { regime: 'VOLATILE', atr: atrShort, spike };
+  // EXTREME: only genuine flash crashes / massive spikes
+  // atrShort > 0.25% (was 0.5% of price per second — that's enormous)
+  // ratio > 4x (was 2.5x — too easily triggered)
+  if (spike || ratio > 4.0 || atrShort > 0.25)  return { regime: 'EXTREME',  atr: atrShort, spike };
+
+  // VOLATILE: elevated but tradeable
+  // atrShort > 0.10% or ratio > 2.5x
+  if (ratio > 2.5 || atrShort > 0.10)           return { regime: 'VOLATILE', atr: atrShort, spike };
+
   return { regime: 'NORMAL', atr: atrShort, spike };
 }
 
@@ -74,7 +96,7 @@ function computeSignal(prices, cooldown) {
   const { regime, atr, spike } = detectRegime(prices);
   const s5 = regime === 'EXTREME' ? 4 : regime === 'VOLATILE' ? 35 : 100;
 
-  // EXTREME or cooldown → no new trades at all
+  // EXTREME or post-spike cooldown → no new trades
   if (regime === 'EXTREME' || cooldown > 0) {
     return {
       action: 'wait',
@@ -86,31 +108,37 @@ function computeSignal(prices, cooldown) {
     };
   }
 
-  const R   = calcRSI(prices);
-  const M   = calcMACD(prices).hist;
-  const B   = calcBB(prices);
-  const e9  = calcEMA(prices, 9);
-  const e21 = calcEMA(prices, 21);
+  const R     = calcRSI(prices);
+  const M     = calcMACD(prices).hist;
+  const B     = calcBB(prices);
+  const e9    = calcEMA(prices, 9);
+  const e21   = calcEMA(prices, 21);
   const price = prices[prices.length - 1];
 
+  // RSI signal
   let s1 = 50;
   if      (R < 25) s1 = 92; else if (R < 32) s1 = 70;
   else if (R > 75) s1 =  8; else if (R > 68) s1 = 30;
 
-  const s2  = Math.max(0, Math.min(100, 50 + M / price * 80000));
+  // MACD histogram
+  const s2 = Math.max(0, Math.min(100, 50 + M / price * 80000));
+
+  // BB %B
   let s3 = 50;
   if      (B.pct <  6) s3 = 88; else if (B.pct < 18) s3 = 66;
   else if (B.pct > 94) s3 = 12; else if (B.pct > 82) s3 = 34;
 
+  // EMA cross
   const gap = e9 && e21 ? (e9 - e21) / e21 * 100 : 0;
   const s4  = Math.max(10, Math.min(90, 50 + gap * 12));
 
+  // VOLATILE: mean-reversion only, 25% size
   const longScore = regime === 'VOLATILE'
     ? s1 * 0.55 + s3 * 0.45
     : s1 * 0.28 + s2 * 0.22 + s3 * 0.25 + s4 * 0.25;
   const shortScore = 100 - longScore;
 
-  const thresh      = regime === 'VOLATILE' ? 82 : 63;
+  const thresh      = regime === 'VOLATILE' ? 80 : 63;
   const chaosFilter = regime === 'VOLATILE' ? 0.25 : 1.0;
 
   let action = 'wait';
@@ -120,7 +148,7 @@ function computeSignal(prices, cooldown) {
   return {
     action, rsi: R, hist: M, bb: B, ema9: e9, ema21: e21,
     atr, regime, chaosFilter, spike,
-    signals: [s1, Math.max(0, Math.min(100, s2)), s3, Math.max(0, Math.min(100, s4)), s5]
+    signals: [s1, Math.max(0,Math.min(100,s2)), s3, Math.max(0,Math.min(100,s4)), s5]
   };
 }
 
