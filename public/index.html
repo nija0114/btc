@@ -704,13 +704,20 @@ function renderAnalysis(a) {
 
 // ─── BOT CONTROL ─────────────────────────────────────────────
 async function botStart() {
-  const posSize = parseInt(document.getElementById('pSz').value);
-  const slPct   = parseFloat(document.getElementById('pSl').value) / 100;
-  const tpPct   = parseFloat(document.getElementById('pTp').value) / 100;
-  await fetch(`${API}/start`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({posSize,slPct,tpPct}) });
+  try {
+    const posSize = parseInt(document.getElementById('pSz')?.value || 10);
+    const slPct   = parseFloat(document.getElementById('pSl')?.value || 2) / 100;
+    const tpPct   = parseFloat(document.getElementById('pTp')?.value || 4) / 100;
+    const res = await fetch('/api/start', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({posSize,slPct,tpPct}) });
+    const data = await res.json();
+    if (data.ok) { document.getElementById('btnStart').textContent = '✓ BOT RUNNING'; document.getElementById('botDot').className = 'dot on'; }
+  } catch(e) { alert('Error: ' + e.message); }
 }
-async function botStop()  { await fetch(`${API}/stop`,  { method:'POST' }); }
-async function botReset() { if(confirm('Reset all trades and balance?')) await fetch(`${API}/reset`, { method:'POST' }); }
+async function botStop()  {
+  await fetch('/api/stop', { method:'POST' });
+  document.getElementById('btnStart').textContent = '▶ START BOT';
+}
+async function botReset() { if(confirm('Reset all trades and balance?')) await fetch('/api/reset', { method:'POST' }); }
 
 // ─── TABS ────────────────────────────────────────────────────
 function showTab(name) {
