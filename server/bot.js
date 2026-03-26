@@ -1,0 +1,127 @@
+'use strict';
+
+// ─── CONSTANTS ────────────────────────────────────────────────
+const SPIKE_COOLDOWN = 18;
+
+// ─── INDICATORS ──────────────────────────────────────────────
+function calcEMA(prices, period) {
+  if (!prices || prices.length < 2) return null;
+  const k = 2 / (period + 1);
+  const start = Math.min(period, prices.length);
+  let e = prices.slice(0, start).reduce((a, b) => a + b) / start;
+  for (let i = start; i < prices.length; i++) e = prices[i] * k + e * (1 - k);
+  return e;
+}
+
+function calcRSI(prices, period = 14) {
+  if (prices.length < period + 1) return 50;
+  const sl = prices.slice(-(period + 1));
+  const ch = sl.map((p, i) => i > 0 ? p - sl[i - 1] : 0).slice(1);
+  const ag = ch.map(c => c > 0 ? c : 0).reduce((a, b) => a + b) / period;
+  const al = ch.map(c => c < 0 ? -c : 0).reduce((a, b) => a + b) / period;
+  return al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+}
+
+function calcMACD(prices) {
+  if (prices.length < 26) return { hist: 0 };
+  const h = calcEMA(prices, 12) - calcEMA(prices, 26);
+  return { hist: h - h * 0.88 };
+}
+
+function calcBB(prices, period = 20) {
+  if (prices.length < period) return { upper: 0, lower: 0, mid: 0, pct: 50 };
+  const sl = prices.slice(-period);
+  const mid = sl.reduce((a, b) => a + b) / period;
+  const std = Math.sqrt(sl.map(p => (p - mid) ** 2).reduce((a, b) => a + b) / period);
+  const [up, lo] = [mid + 2 * std, mid - 2 * std];
+  const p = prices[prices.length - 1];
+  return { upper: up, lower: lo, mid, pct: (up - lo) > 0 ? (p - lo) / (up - lo) * 100 : 50 };
+}
+
+function calcATRpct(prices, period = 14) {
+  if (prices.length < 2) return 0;
+  const sl = prices.slice(-(period + 1));
+  let s = 0;
+  for (let i = 1; i < sl.length; i++) s += Math.abs(sl[i] - sl[i - 1]);
+  return (s / (sl.length - 1)) / prices[prices.length - 1] * 100;
+}
+
+// ─── REGIME DETECTION ────────────────────────────────────────
+function detectRegime(prices) {
+  if (prices.length < 10) return { regime: 'NORMAL', atr: 0, spike: false };
+  const atrShort  = calcATRpct(prices, 5);
+  const atrMedium = calcATRpct(prices, 14);
+  const ratio     = atrMedium > 0 ? atrShort / atrMedium : 1;
+
+  let spike = false;
+  if (prices.length >= 3) {
+    const lastMove = Math.abs(prices[prices.length - 1] - prices[prices.length - 2])
+                     / prices[prices.length - 2] * 100;
+    spike = lastMove > atrMedium * 4;
+  }
+
+  if (spike || ratio > 2.5 || atrShort > 0.5)  return { regime: 'EXTREME',  atr: atrShort, spike };
+  if (ratio > 1.5 || atrShort > 0.22)           return { regime: 'VOLATILE', atr: atrShort, spike };
+  return { regime: 'NORMAL', atr: atrShort, spike };
+}
+
+// ─── SIGNAL ──────────────────────────────────────────────────
+function computeSignal(prices, cooldown) {
+  if (prices.length < 30) {
+    return { action: 'wait', signals: [50,50,50,50,50], regime: 'NORMAL', chaosFilter: 1 };
+  }
+
+  const { regime, atr, spike } = detectRegime(prices);
+  const s5 = regime === 'EXTREME' ? 4 : regime === 'VOLATILE' ? 35 : 100;
+
+  // EXTREME or cooldown → no new trades at all
+  if (regime === 'EXTREME' || cooldown > 0) {
+    return {
+      action: 'wait',
+      rsi: calcRSI(prices), hist: 0,
+      bb: calcBB(prices),
+      ema9: calcEMA(prices, 9), ema21: calcEMA(prices, 21),
+      atr, regime, chaosFilter: 0, spike,
+      signals: [50, 50, 50, 50, s5]
+    };
+  }
+
+  const R   = calcRSI(prices);
+  const M   = calcMACD(prices).hist;
+  const B   = calcBB(prices);
+  const e9  = calcEMA(prices, 9);
+  const e21 = calcEMA(prices, 21);
+  const price = prices[prices.length - 1];
+
+  let s1 = 50;
+  if      (R < 25) s1 = 92; else if (R < 32) s1 = 70;
+  else if (R > 75) s1 =  8; else if (R > 68) s1 = 30;
+
+  const s2  = Math.max(0, Math.min(100, 50 + M / price * 80000));
+  let s3 = 50;
+  if      (B.pct <  6) s3 = 88; else if (B.pct < 18) s3 = 66;
+  else if (B.pct > 94) s3 = 12; else if (B.pct > 82) s3 = 34;
+
+  const gap = e9 && e21 ? (e9 - e21) / e21 * 100 : 0;
+  const s4  = Math.max(10, Math.min(90, 50 + gap * 12));
+
+  const longScore = regime === 'VOLATILE'
+    ? s1 * 0.55 + s3 * 0.45
+    : s1 * 0.28 + s2 * 0.22 + s3 * 0.25 + s4 * 0.25;
+  const shortScore = 100 - longScore;
+
+  const thresh      = regime === 'VOLATILE' ? 82 : 63;
+  const chaosFilter = regime === 'VOLATILE' ? 0.25 : 1.0;
+
+  let action = 'wait';
+  if      (longScore  > thresh) action = 'long';
+  else if (shortScore > thresh) action = 'short';
+
+  return {
+    action, rsi: R, hist: M, bb: B, ema9: e9, ema21: e21,
+    atr, regime, chaosFilter, spike,
+    signals: [s1, Math.max(0, Math.min(100, s2)), s3, Math.max(0, Math.min(100, s4)), s5]
+  };
+}
+
+module.exports = { computeSignal, detectRegime, calcRSI, calcBB, calcEMA, calcATRpct, SPIKE_COOLDOWN };
